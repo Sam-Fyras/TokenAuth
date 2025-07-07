@@ -1,4 +1,4 @@
-class ClaimsResponse:
+class AuthContext:
     """
     Represents a claims response with various attributes.
     """
