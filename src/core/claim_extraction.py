@@ -1,131 +1,149 @@
-from fastapi import Request, HTTPException
-from datetime import datetime
+import os
 import jwt
-import pathlib
-from src.schemas.claims_response import ClaimsResponse
+import requests
+import logging
+from jwt.algorithms import RSAAlgorithm
+from dotenv import load_dotenv
+from fastapi import Request, HTTPException
+from src.schemas.claims_response import AuthContext
+
+# Load environment variables
+load_dotenv()
+
+# Configure logging
+logger = logging.getLogger("auth")
+logging.basicConfig(level=logging.INFO)
+
+FYRAS_TENANT_ID = os.getenv("AZURE_TENANT_ID")
+FYRAS_CLIENT_ID = os.getenv("CLIENT_ID")
+FYRAS_AUDIENCE = f"api://{FYRAS_CLIENT_ID}"
 
 
-def extract_auth_header(request: Request):
+def extract_auth_header(request: Request) -> str:
     """
-    Extracts the JWT token from the Authorization header of the request.
-    Args:
-        request: FastAPI Request object containing headers.
-
-    Returns:
-        str: The JWT token extracted from the Authorization header.
-
+    Extracts the JWT token from the Authorization header of a FastAPI request.
     """
+    logger.info("Extracting Authorization header.")
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
+        logger.warning("Authorization header missing or invalid.")
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-    return auth_header.split(" ")[1]
+    token = auth_header.split(" ", 1)[1]
+    logger.debug("Authorization token extracted successfully.")
+    return token
 
 
-def get_jwt_header_and_payload(token: str):
+def fetch_openid_config_and_jwks(tenant_id: str):
     """
-    Extracts the header and payload from a JWT token without verifying the signature.
-    Args:
-        token: str: The JWT token to decode.
-
-    Returns:
-        tuple: A tuple containing the JWT header and payload.
-
+    Retrieves the OpenID configuration and JWKS keys for the given Azure tenant.
     """
+    logger.info(f"Fetching OpenID config for tenant: {tenant_id}")
+    config_url = f"https://login.microsoftonline.com/{tenant_id}/v2.0/.well-known/openid-configuration"
     try:
-        header = jwt.get_unverified_header(token)
-        payload = jwt.decode(token, options={"verify_signature": False})
-        return header, payload
-    except jwt.DecodeError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid token format: {str(e)}")
-    except jwt.InvalidTokenError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid token structure: {str(e)}")
+        config = requests.get(config_url, timeout=5).json()
+        jwks_uri = config["jwks_uri"]
+        issuer = config["issuer"]
+        logger.debug(f"Issuer: {issuer}")
+        logger.debug(f"JWKS URI: {jwks_uri}")
+
+        logger.info("Fetching JWKS...")
+        jwks = requests.get(jwks_uri, timeout=5).json()
+        logger.debug("JWKS successfully fetched.")
+        return issuer, jwks
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Token validation error: {str(e)}")
+        logger.error(f"Failed to fetch OpenID configuration or JWKS: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve Azure metadata")
 
 
-def validate_jwt_header(header):
+def get_public_key(jwks: dict, kid: str):
     """
-    Validates the JWT header to ensure it contains the expected fields.
-    Args:
-        header: dict: The JWT header to validate.
-
-    Returns:
-        str: The algorithm used in the JWT header if valid.
-
+    Extract the RSA public key from JWKS based on the kid.
     """
-    if header.get("typ") != "JWT":
-        raise HTTPException(status_code=400, detail="Invalid token type, expected JWT")
-    alg = header.get("alg")
-    if alg not in ["RS256", "RS512"]:
-        raise HTTPException(status_code=400, detail=f"Unsupported algorithm: {alg}")
-    if not header.get("kid"):
-        raise HTTPException(status_code=400, detail="Token missing key ID")
-    return alg
+    logger.info(f"Locating public key with kid: {kid}")
+    for jwk in jwks["keys"]:
+        if jwk["kid"] == kid:
+            logger.debug(f"Matching key found for kid: {kid}")
+            return RSAAlgorithm.from_jwk(jwk)
+    logger.error(f"No matching key found for kid: {kid}")
+    raise HTTPException(status_code=401, detail="No matching 'kid' found in JWKS")
 
 
-def validate_jwt_claims(payload):
+def decode_token_without_verification(token: str) -> tuple:
     """
-    Validates the JWT payload to ensure it contains the required claims.
-    Args:
-        payload: dict: The JWT payload to validate.
-
-    Returns:
-        None: If all required claims are present.
-
+    Decode the token header and claims without verifying the signature.
     """
-    required_claims = ["iss", "aud", "exp", "tid"]
-    missing_claims = [claim for claim in required_claims if not payload.get(claim)]
-    if missing_claims:
-        raise HTTPException(status_code=400, detail=f"Token missing required claims: {missing_claims}")
+    logger.debug("Decoding token without signature verification.")
+    header = jwt.get_unverified_header(token)
+    claims = jwt.decode(token, options={"verify_signature": False})
+    logger.debug(f"Token header: {header}")
+    logger.debug(f"Token claims: {claims}")
+    return header, claims
 
 
-def check_token_expiration(payload):
+def verify_token_signature(token: str, audience: str, tenant_id: str) -> dict:
     """
-    Checks if the JWT token has expired based on the 'exp' claim.
-    Args:
-        payload: The decoded JWT payload containing claims.
-
-    Returns:
-        bool: True if the token is still valid, False if it has expired.
-
+    Fully verify the token signature using Azure public keys and expected issuer.
     """
-    exp = payload.get("exp")
-    if exp:
-        current_time = datetime.now().timestamp()
-        if current_time <= exp:
-            return True
+    logger.info("Starting token verification process.")
+    header, unverified_claims = decode_token_without_verification(token)
 
-    # If 'exp' claim is missing or token has expired
-    raise HTTPException(status_code=401, detail="Token has expired or is invalid")
+    issuer, jwks = fetch_openid_config_and_jwks(tenant_id)
+    public_key_obj = get_public_key(jwks, header["kid"])
 
+    token_issuer = unverified_claims.get("iss")
+    issuer_v1 = f"https://sts.windows.net/{tenant_id}/"
+    valid_issuers = [issuer, issuer_v1]
 
-def get_claims(request: Request):
-    """
-    Extracts the tenant ID from the JWT token in the Authorization header.
+    logger.debug(f"Token issuer: {token_issuer}")
+    logger.debug(f"Valid issuers: {valid_issuers}")
+    logger.debug(f"Expected audience: {audience}")
 
-    Parameters:
-    - request: FastAPI Request object containing headers.
+    if token_issuer not in valid_issuers:
+        logger.warning(f"Token issuer '{token_issuer}' is not in the list of accepted issuers.")
+        raise HTTPException(status_code=401, detail="Invalid token issuer")
 
-    Returns:
-    - JSON response with the tenant ID if valid.
-    """
-    token = extract_auth_header(request)
-    header, payload = get_jwt_header_and_payload(token)
-    alg = validate_jwt_header(header)
-    validate_jwt_claims(payload)
-    if check_token_expiration(payload):
-        return ClaimsResponse(
-            iss=payload.get("iss"),
-            aud=payload.get("aud"),
-            exp=payload.get("exp"),
-            tid=payload.get("tid"),
-            kid=header.get("kid"),
-            alg=alg,
-            iat=payload.get("iat"),
-            nbf=payload.get("nbf"),
-            sub=payload.get("sub"),
-            name=payload.get("name"),
-            email=payload.get("email")
+    try:
+        logger.info("Verifying token signature and claims...")
+        payload = jwt.decode(
+            token,
+            key=public_key_obj,
+            algorithms=["RS256"],
+            audience=audience,
+            issuer=token_issuer
         )
-        return None
-    return None
+        logger.info("Token signature successfully verified.")
+        return payload
+    except jwt.PyJWTError as e:
+        logger.error(f"Token verification failed: {str(e)}")
+        raise HTTPException(status_code=401, detail=f"Token verification failed: {str(e)}")
+
+
+def get_claims(request: Request) -> AuthContext:
+    """
+    Main function to extract, validate, and return token claims.
+    """
+    logger.info("Extracting and validating token...")
+    token = extract_auth_header(request)
+
+    if not FYRAS_TENANT_ID or not FYRAS_CLIENT_ID:
+        logger.critical("Environment variables AZURE_TENANT_ID or CLIENT_ID are not set.")
+        raise HTTPException(status_code=500, detail="Missing environment config")
+
+    audience = f"api://{FYRAS_CLIENT_ID}"
+    claims = verify_token_signature(token, audience, FYRAS_TENANT_ID)
+    header, _ = decode_token_without_verification(token)
+
+    logger.debug("Mapping verified claims to AuthContext schema.")
+    return AuthContext(
+        iss=claims.get("iss"),
+        aud=claims.get("aud"),
+        exp=claims.get("exp"),
+        tid=claims.get("tid"),
+        kid=header.get("kid"),
+        alg=header.get("alg"),
+        iat=claims.get("iat"),
+        nbf=claims.get("nbf"),
+        sub=claims.get("sub"),
+        name=claims.get("name"),
+        email=claims.get("email")
+    )
