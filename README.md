@@ -1,88 +1,95 @@
-TokenAuth - AAD Token Validation Library
+# TokenAuth - AAD Token Validation Library
 
-🔍 Overview
+## 🔍 Overview
 
-TokenAuth is a reusable Python package for validating Azure Active Directory (AAD) Bearer tokens across Fyras microservices. It extracts and returns authentication context (tenant ID, user ID, etc.) from incoming requests.
+TokenAuth is a reusable Python package for validating Azure Active Directory (AAD) Bearer tokens across Fyras microservices. It extracts and returns authentication context (issuer, tenant ID, user ID, name, email, etc.) from incoming requests.
 
-🎯 Use Cases
+## 🎯 Use Cases
 
-Validate and decode JWT tokens issued by Microsoft AAD
+- Validate and decode JWT tokens issued by Microsoft AAD
+- Extract tenant ID and user ID for tenant-aware logic
+- Share the same token validation logic across:
+  - Content Moderation Service
+  - Token Usage Estimation Service
+  - Redaction/Obfuscation Service
 
-Extract tenant ID and user ID for tenant-aware logic
+## 📦 Installation
 
-Share the same token validation logic across:
-
-Content Moderation Service
-
-Token Usage Estimation Service
-
-Redaction/Obfuscation Service
-
-📦 Installation
-
+```bash
 pip install git+https://github.com/fyras/TokenAuth.git@main
+```
 
-🔧 Usage
+## 🔧 Usage
 
-from tokenauth.validator import validate_token
+```python
+from token_auth.claim_extraction.auth import get_claims
 
-# In FastAPI or Flask route handler:
 def handle_request(request):
     token = request.headers.get("Authorization").split(" ")[1]
-    auth_ctx = validate_token(token)
+    auth_ctx = get_claims(token)
 
-    print("Tenant ID:", auth_ctx.tenant_id)
-    print("User ID:", auth_ctx.user_id)
+    print("Tenant ID:", auth_ctx.tid)
+    print("User ID:", auth_ctx.sub)
+    print("Name:", auth_ctx.name)
+    print("Email:", auth_ctx.email)
+```
 
-🧱 AuthContext (Output)
+## 🧱 AuthContext (Output)
 
+```python
 class AuthContext(BaseModel):
-    tenant_id: str
-    user_id: str
-    username: Optional[str] = None
-    roles: Optional[List[str]] = []
+    iss: str
+    aud: str
+    exp: int
+    tid: str
+    kid: str
+    alg: str
+    iat: int
+    nbf: int
+    sub: str
+    name: Optional[str] = None
+    email: Optional[str] = None
+```
 
-🔐 Supported Token Claims
+## 🔐 Supported Token Claims
 
-tid → Tenant ID
+- `tid` → Tenant ID
+- `sub` → User ID (subject)
+- `name` → User's display name
+- `email` → User's email address
+- `aud` → Audience
+- `iss` → Issuer
+- `roles` (if present) → Assigned roles
 
-sub or oid → User ID
+## 🔄 Internals
 
-upn → User principal name
+- Uses [PyJWT](https://pyjwt.readthedocs.io/) for JWT parsing and validation
+- Fetches Azure AD public keys (JWKS) from the tenant-specific OpenID configuration endpoint
+- Validates token signature, issuer, and audience
+- Environment variables required:
+  - `AZURE_TENANT_ID`
+  - `CLIENT_ID`
+- Logging for debugging and error tracing
 
-roles → Assigned roles
+## 📘 Future Enhancements
 
-🔄 Internals
+- Automatic JWKS refresh and caching
+- Support for multiple AAD tenants
+- Scoped permissions
+- Custom exceptions and error handler middleware
 
-Uses authlib or python-jose to validate JWT
+## 🧪 Test Locally
 
-Uses AAD public key from:
-
-https://login.microsoftonline.com/common/discovery/keys
-
-Optional caching of JWKS for performance
-
-📘 Future Enhancements
-
-Automatic JWKS refresh
-
-Support for multiple AAD tenants
-
-Scoped permissions
-
-Custom exceptions and error handler middleware
-
-🧪 Test Locally
-
+```bash
 pytest tests/
+```
 
-👥 Contributors
+## 👥 Contributors
 
-Samuthrakumar Venugopalan
+- Samuthrakumar Venugopalan
+- Srihari Raman
+- Fyras Internship Team
 
-Fyras Internship Team
-
-📄 License
+## 📄 License
 
 MIT License (or as defined per Fyras internal policy)
-
