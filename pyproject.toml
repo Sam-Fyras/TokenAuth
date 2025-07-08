@@ -1,0 +1,10 @@
+[project]
+name = "fyras-token-auth"
+version = "0.1.0"
+description = "Fyras internal token validation and claim extraction utilities"
+authors = [{name = "Srihari Raman", email = "sriharii@fyrassolutions.com"}]
+dependencies = [
+    "pyjwt",
+    "requests",
+    "python-dotenv"
+]
