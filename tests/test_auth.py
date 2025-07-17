@@ -1,8 +1,8 @@
 import os
 import pytest
 from dotenv import load_dotenv
-from token_auth.claim_extraction.auth import TokenVerifier
-from token_auth.schemas.claims_response import AuthContext
+from fyras_token_auth.claim_extraction.auth import TokenVerifier
+from fyras_token_auth.schemas.claims_response import AuthContext
 
 load_dotenv()
 
