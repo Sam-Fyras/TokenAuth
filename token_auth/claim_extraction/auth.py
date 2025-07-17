@@ -27,6 +27,13 @@ class TokenVerifier:
         load_dotenv()
         self.__tenant_id: str = os.getenv("AZURE_TENANT_ID", "")
         self.__client_id: str = os.getenv("AZURE_CLIENT_ID", "")
+
+        # Validate environment variables
+        if not self.__tenant_id:
+            raise ValueError("Environment variable 'AZURE_TENANT_ID' is not set or is empty.")
+        if not self.__client_id:
+            raise ValueError("Environment variable 'AZURE_CLIENT_ID' is not set or is empty.")
+
         self.__audience: str = f"api://{self.__client_id}"
         self.__issuer, self.__jwks = self.__fetch_openid_metadata()
 
