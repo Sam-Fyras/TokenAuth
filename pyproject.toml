@@ -13,5 +13,6 @@ dependencies = [
     "python-dotenv>=1.0.0",
 ]
 
-[tool.setuptools]
-packages = ["fyras_token_auth"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["fyras_token_auth*"]
