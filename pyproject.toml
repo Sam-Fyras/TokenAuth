@@ -1,24 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "fyras-token-auth"
 version = "0.1.0"
-description = "Fyras internal token validation and claim extraction utilities"
-authors = [
-    { name = "Srihari Raman", email = "sriharii@fyrassolutions.com" }
-]
-readme = "README.md"
-license = { file = "LICENSE" }
-requires-python = ">=3.8"
-
+description = "AAD Token Validation Library for Fyras microservices"
+authors = [{ name = "Your Name", email = "you@example.com" }]
 dependencies = [
     "pyjwt>=2.0.0",
     "requests>=2.25.0",
-    "python-dotenv>=1.0.0"
+    "python-dotenv>=1.0.0",
 ]
 
-[build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
-
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["token_auth*"]
+[tool.setuptools]
+packages = ["fyras_token_auth"]
