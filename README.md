@@ -36,7 +36,8 @@ pip install "fyras-token-auth @ git+ssh://git@github.com/Sam-Fyras/TokenAuth.git
 ## 🔧 Usage
 
 ```python
-from token_auth.claim_extraction.auth import TokenVerifier
+from fyras_token_auth.claim_extraction.auth import TokenVerifier
+
 
 def handle_request(request):
     token = request.headers.get("Authorization").split(" ")[1]

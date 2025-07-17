@@ -5,7 +5,7 @@ import logging
 from typing import Dict, Tuple
 from jwt.algorithms import RSAAlgorithm
 from dotenv import load_dotenv
-from token_auth.schemas.claims_response import AuthContext
+from fyras_token_auth.schemas.claims_response import AuthContext
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
