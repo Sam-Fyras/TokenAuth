@@ -3,7 +3,7 @@ import jwt
 import requests
 import logging
 from typing import Dict, Tuple
-from jwt import algorithms
+from jwt.algorithms import RSAAlgorithm
 from dotenv import load_dotenv
 from fyras_token_auth.schemas.claims_response import AuthContext
 
@@ -83,7 +83,7 @@ class TokenVerifier:
         logger.debug(f"[TokenVerifier] Finding public key for kid: {kid}")
         for key in self.__jwks["keys"]:
             if key["kid"] == kid:
-                return algorithms.RSAAlgorithm.from_jwk(key)
+                return RSAAlgorithm.from_jwk(key)
         raise ValueError("No matching public key found for 'kid'")
 
     def __decode_unverified(self, token: str) -> Tuple[Dict, Dict]:
