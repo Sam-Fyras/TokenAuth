@@ -3,7 +3,7 @@ import jwt
 import requests
 import logging
 from typing import Dict, Tuple
-from jwt.algorithms import RSAAlgorithm
+from jwt import PyJWKClient
 from dotenv import load_dotenv
 from token_auth.schemas.claims_response import AuthContext
 
@@ -24,10 +24,37 @@ class TokenVerifier:
     """
 
     def __init__(self):
-        load_dotenv()
+        # Try to load .env from multiple possible locations
+        import pathlib
+        current_dir = pathlib.Path.cwd()
+        possible_env_paths = [
+            current_dir / ".env",
+            current_dir.parent / ".env",
+            pathlib.Path(__file__).parent.parent.parent / "ContentModeratorService" / ".env",
+            pathlib.Path(__file__).parent.parent.parent / "LLMFirewall" / ".env"
+        ]
+        
+        for env_path in possible_env_paths:
+            if env_path.exists():
+                load_dotenv(env_path)
+                logger.debug(f"[TokenVerifier] Loaded .env from: {env_path}")
+                break
+        else:
+            load_dotenv()  # Fallback to default behavior
+        
         self.__tenant_id: str = os.getenv("AZURE_TENANT_ID", "")
         self.__client_id: str = os.getenv("AZURE_CLIENT_ID", "")
+        
+        if not self.__tenant_id:
+            logger.error("[TokenVerifier] AZURE_TENANT_ID not found in environment variables")
+            raise RuntimeError("AZURE_TENANT_ID environment variable is required")
+        
+        if not self.__client_id:
+            logger.error("[TokenVerifier] AZURE_CLIENT_ID not found in environment variables")
+            raise RuntimeError("AZURE_CLIENT_ID environment variable is required")
+        
         self.__audience: str = f"api://{self.__client_id}"
+        logger.debug(f"[TokenVerifier] Initialized with tenant_id: {self.__tenant_id}, client_id: {self.__client_id}")
         self.__issuer, self.__jwks = self.__fetch_openid_metadata()
 
     # Properties to restrict access to sensitive attributes
@@ -49,16 +76,40 @@ class TokenVerifier:
         Raises:
             RuntimeError: If metadata cannot be fetched.
         """
-        logger.info(f"[TokenVerifier] Fetching metadata for tenant.")
+        logger.info(f"[TokenVerifier] Fetching metadata for tenant: {self.__tenant_id}")
         config_url = f"https://login.microsoftonline.com/{self.__tenant_id}/v2.0/.well-known/openid-configuration"
+        
         try:
-            config = requests.get(config_url, timeout=5).json()
-            jwks = requests.get(config["jwks_uri"], timeout=5).json()
-            logger.debug(f"[TokenVerifier] Issuer: {config['issuer']}")
+            logger.debug(f"[TokenVerifier] Fetching config from: {config_url}")
+            config_response = requests.get(config_url, timeout=10)
+            config_response.raise_for_status()
+            config = config_response.json()
+            
+            logger.debug(f"[TokenVerifier] Config keys: {list(config.keys())}")
+            
+            if "jwks_uri" not in config:
+                logger.error(f"[TokenVerifier] No 'jwks_uri' in config. Available keys: {list(config.keys())}")
+                raise RuntimeError("OpenID config missing 'jwks_uri'")
+            
+            jwks_url = config["jwks_uri"]
+            logger.debug(f"[TokenVerifier] Fetching JWKS from: {jwks_url}")
+            
+            jwks_response = requests.get(jwks_url, timeout=10)
+            jwks_response.raise_for_status()
+            jwks = jwks_response.json()
+            
+            logger.info(f"[TokenVerifier] Successfully fetched metadata. Issuer: {config['issuer']}")
             return config["issuer"], jwks
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"[TokenVerifier] Network error fetching OpenID metadata: {e}")
+            raise RuntimeError(f"Network error fetching OpenID config: {e}")
+        except KeyError as e:
+            logger.error(f"[TokenVerifier] Missing key in OpenID config: {e}")
+            raise RuntimeError(f"Invalid OpenID config structure: missing {e}")
         except Exception as e:
-            logger.error(f"[TokenVerifier] Failed to fetch OpenID metadata: {e}")
-            raise RuntimeError("Unable to fetch OpenID config or JWKS")
+            logger.error(f"[TokenVerifier] Unexpected error fetching OpenID metadata: {e}")
+            raise RuntimeError(f"Unable to fetch OpenID config or JWKS: {e}")
 
     def __get_public_key(self, kid: str):
         """
@@ -76,7 +127,10 @@ class TokenVerifier:
         logger.debug(f"[TokenVerifier] Finding public key for kid: {kid}")
         for key in self.__jwks["keys"]:
             if key["kid"] == kid:
-                return RSAAlgorithm.from_jwk(key)
+                # Use PyJWK to convert the key
+                from jwt import PyJWK
+                jwk = PyJWK(key)
+                return jwk.key
         raise ValueError("No matching public key found for 'kid'")
 
     def __decode_unverified(self, token: str) -> Tuple[Dict, Dict]:
