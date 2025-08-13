@@ -2,8 +2,7 @@ import os
 import jwt
 import requests
 import logging
-from typing import Dict, Tuple
-from jwt import PyJWKClient
+from typing import Dict, Tuple, List
 from dotenv import load_dotenv
 from fyras_token_auth.schemas.claims_response import AuthContext
 
@@ -18,7 +17,7 @@ class TokenVerifier:
     Attributes:
         __tenant_id (str): Azure AD tenant ID, loaded from environment.
         __client_id (str): Azure AD client (application) ID, loaded from environment.
-        __audience (str): Expected audience string derived from the client ID.
+        __audiences (List[str]): Expected audience strings derived from the client ID.
         __issuer (str): Token issuer retrieved from OpenID configuration.
         __jwks (dict): JSON Web Key Set used to verify token signatures.
     """
@@ -33,7 +32,7 @@ class TokenVerifier:
             pathlib.Path(__file__).parent.parent.parent / "ContentModeratorService" / ".env",
             pathlib.Path(__file__).parent.parent.parent / "LLMFirewall" / ".env"
         ]
-        
+
         for env_path in possible_env_paths:
             if env_path.exists():
                 load_dotenv(env_path)
@@ -41,20 +40,22 @@ class TokenVerifier:
                 break
         else:
             load_dotenv()  # Fallback to default behavior
-        
+
         self.__tenant_id: str = os.getenv("AZURE_TENANT_ID", "")
         self.__client_id: str = os.getenv("AZURE_CLIENT_ID", "")
-        
+
         if not self.__tenant_id:
             logger.error("[TokenVerifier] AZURE_TENANT_ID not found in environment variables")
             raise RuntimeError("AZURE_TENANT_ID environment variable is required")
-        
+
         if not self.__client_id:
             logger.error("[TokenVerifier] AZURE_CLIENT_ID not found in environment variables")
             raise RuntimeError("AZURE_CLIENT_ID environment variable is required")
-        
-        self.__audience: str = f"api://{self.__client_id}"
-        logger.debug(f"[TokenVerifier] Initialized with tenant_id: {self.__tenant_id}, client_id: {self.__client_id}")
+
+        # Accept both "api://<client_id>" and "<client_id>" as valid audiences
+        self.__audiences: List[str] = [f"api://{self.__client_id}", self.__client_id]
+        logger.debug(
+            f"[TokenVerifier] Initialized with tenant_id: {self.__tenant_id}, client_id: {self.__client_id}, audiences: {self.__audiences}")
         self.__issuer, self.__jwks = self.__fetch_openid_metadata()
 
     # Properties to restrict access to sensitive attributes
@@ -78,29 +79,29 @@ class TokenVerifier:
         """
         logger.info(f"[TokenVerifier] Fetching metadata for tenant: {self.__tenant_id}")
         config_url = f"https://login.microsoftonline.com/{self.__tenant_id}/v2.0/.well-known/openid-configuration"
-        
+
         try:
             logger.debug(f"[TokenVerifier] Fetching config from: {config_url}")
             config_response = requests.get(config_url, timeout=10)
             config_response.raise_for_status()
             config = config_response.json()
-            
+
             logger.debug(f"[TokenVerifier] Config keys: {list(config.keys())}")
-            
+
             if "jwks_uri" not in config:
                 logger.error(f"[TokenVerifier] No 'jwks_uri' in config. Available keys: {list(config.keys())}")
                 raise RuntimeError("OpenID config missing 'jwks_uri'")
-            
+
             jwks_url = config["jwks_uri"]
             logger.debug(f"[TokenVerifier] Fetching JWKS from: {jwks_url}")
-            
+
             jwks_response = requests.get(jwks_url, timeout=10)
             jwks_response.raise_for_status()
             jwks = jwks_response.json()
-            
+
             logger.info(f"[TokenVerifier] Successfully fetched metadata. Issuer: {config['issuer']}")
             return config["issuer"], jwks
-            
+
         except requests.exceptions.RequestException as e:
             logger.error(f"[TokenVerifier] Network error fetching OpenID metadata: {e}")
             raise RuntimeError(f"Network error fetching OpenID config: {e}")
@@ -182,7 +183,7 @@ class TokenVerifier:
                 token,
                 key=public_key,
                 algorithms=["RS256"],
-                audience=self.__audience,
+                audience=self.__audiences,  # <--- Accept both formats
                 issuer=token_issuer
             )
 
